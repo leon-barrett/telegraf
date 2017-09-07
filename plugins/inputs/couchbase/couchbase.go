@@ -2,6 +2,7 @@ package couchbase
 
 import (
 	"regexp"
+	"strconv"
 	"sync"
 
 	couchbase "github.com/couchbase/go-couchbase"
@@ -10,7 +11,8 @@ import (
 )
 
 type Couchbase struct {
-	Servers []string
+	Servers         []string
+	BucketNodeStats []string
 }
 
 var sampleConfig = `
@@ -24,6 +26,15 @@ var sampleConfig = `
   ## If no protocol is specifed, HTTP is used.
   ## If no port is specified, 8091 is used.
   servers = ["http://localhost:8091"]
+  ## Detailed per-bucket-per-node stats may be collected also, although they
+  ## are not included by default since these detailed stats entail an extra
+  ## request for each bucket.
+  ## The default is to collect none.
+  # BucketNodeStats = []
+  ## Specific per-bucket-per-node stats may be collected.
+  # BucketNodeStats = ["curr_items", "ep_diskqueue_items", "ep_bg_fetched"]
+  ## All per-bucket-per-node stats may be collected.
+  # BucketNodeStats = ["*"]
 `
 
 var regexpURI = regexp.MustCompile(`(\S+://)?(\S+\:\S+@)`)
@@ -97,6 +108,32 @@ func (r *Couchbase) gatherServer(addr string, acc telegraf.Accumulator, pool *co
 		fields["data_used"] = bs["dataUsed"]
 		fields["mem_used"] = bs["memUsed"]
 		acc.AddFields("couchbase_bucket", fields, tags)
+	}
+
+	if len(r.BucketNodeStats) > 0 {
+		includedStats := map[string]bool{}
+		for _, k := range r.BucketNodeStats {
+			includedStats[k] = true
+		}
+		for bucketName, bucket := range pool.BucketMap {
+			// We must refresh the bucket to get the list of nodes. Plus, if we
+			// don't refresh the bucket, GetStats often segfaults.
+			bucket.Refresh()
+			allStats := bucket.GetStats("")
+			for nodeName, nodeStats := range allStats {
+				tags := map[string]string{"cluster": addr, "bucket": bucketName, "hostname": nodeName}
+				fields := make(map[string]interface{})
+				for k, v := range nodeStats {
+					if includedStats["*"] || includedStats[k] {
+						f, err := strconv.ParseFloat(v, 64)
+						if err == nil {
+							fields[k] = f
+						}
+					}
+				}
+				acc.AddFields("couchbase_bucket_node", fields, tags)
+			}
+		}
 	}
 	return nil
 }

@@ -38,6 +38,7 @@ func TestGatherServer(t *testing.T) {
 			"mem_used":           202156957464.0,
 		},
 		map[string]string{"cluster": "mycluster", "bucket": "blastro-df"})
+	acc.AssertDoesNotContainMeasurement(t, "couchbase_bucket_node")
 }
 
 func TestSanitizeURI(t *testing.T) {
